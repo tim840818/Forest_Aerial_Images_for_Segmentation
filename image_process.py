@@ -1,19 +1,19 @@
 import os, sys
 
 import numpy as np
+import pandas as pd
+from pandas import DataFrame
 import cv2
 from matplotlib import pyplot as plt
 
 import torch
-from torch import nn
-from torch.nn import functional as F
 import torchvision.transforms as T
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset #, DataLoader, random_split
 
 from sklearn.model_selection import train_test_split, KFold
 
-## Prprocess for label images
-def rgb2bin(img, threshold=IMAGE_THRESHOLD):
+## Prprocess for masks
+def rgb2bin(img, threshold=127):
     img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     _, img = cv2.threshold(img, threshold, 255, cv2.THRESH_BINARY)
     return img
@@ -57,13 +57,15 @@ def aug_shape(img, idx=np.random.randint(0, 7)):
     return img_augs[idx], f"shape{idx+1}"
 
 def _erase_get_params(
+    img,
     scale=(10, 25),
     start=0
 ):
-    h, w = IMAGE_SHAPE
+    img_shape = img.shape[:2]
+    h, w = img_shape
     h_size = np.random.randint(*scale)
     w_size = np.random.randint(*scale)
-    start_max = min(IMAGE_SHAPE[0] - h_size, IMAGE_SHAPE[1] - w_size)
+    start_max = min(img_shape[0] - h_size, img_shape[1] - w_size)
     if start > start_max:
         start = start_max
     h_start = np.random.randint(start, start_max)
@@ -76,23 +78,28 @@ def aug_erase(img, size=(0, 0), start=(0, 0)):
     return img_erase, "erase"
 
 def _crop_get_params(
+    img,
     scale=(216, 240),
     start=0
 ):
-    h, w = IMAGE_SHAPE
+    img_shape = img.shape[:2]
+    h, w = img_shape
     size = np.random.randint(*scale)
-    start_max = IMAGE_SHAPE[0] - size
+    start_max = img_shape[0] - size
     if start > start_max:
         start = start_max
     h_start = np.random.randint(start, start_max)
     w_start = np.random.randint(start, start_max)
     return (size,)*2, (h_start, w_start)
-def aug_crop_resize(img, size=IMAGE_SHAPE, start=(0, 0)):
+def aug_crop_resize(img, size=None, start=(0, 0)):
+    img_shape = img.shape[:2]
+    if not size:
+        size = img_shape
     h_start, w_start = start
     ## crop the image
     img_crop = img[h_start:h_start+size[0], w_start:w_start+size[1]]
     ## resize the image
-    img_crop = cv2.resize(img_crop, IMAGE_SHAPE)
+    img_crop = cv2.resize(img_crop, img_shape[::-1])
     return img_crop, "crop"
 
 def aug_brightcontrast(img, alpha=1.0, beta=0.0):
@@ -108,25 +115,25 @@ def aug_gaussian_noise(img, mean=0, std=10):
 def aug_gaussian_blur(img, kernel_size=(3, 3), sigma=0):
     return cv2.GaussianBlur(img, kernel_size, sigma), "blur"
 
-def apply_augmentation(sample, label, tag, augidx): # apply a single augmentation regarding the given augidx
+def apply_augmentation(sample, mask, tag, augidx): # apply a single augmentation regarding the given augidx
     match augidx:
         ## apply shape augmentation
-        case 1: # apply shape augmentation to (sample, label) simultaneously # if np.random.rand() < 0.5:
+        case 1: # apply shape augmentation to (sample, mask) simultaneously # if np.random.rand() < 0.5:
             idx_shape = np.random.randint(0, 7)
             sample, aug_tag = aug_shape(sample, idx_shape)
-            label, _ = aug_shape(label, idx_shape)
+            mask, _ = aug_shape(mask, idx_shape)
             tag += f"_{aug_tag}"
         ## apply erase augmentation
-        case 2: # apply erase augmentation to (sample, label) simultaneously # if np.random.rand() < 0.4:
-            size, start = _erase_get_params()
+        case 2: # apply erase augmentation to (sample, mask) simultaneously # if np.random.rand() < 0.4:
+            size, start = _erase_get_params(sample)
             sample, aug_tag = aug_erase(sample, size, start)
-            label, _ = aug_erase(label, size, start)
+            mask, _ = aug_erase(mask, size, start)
             tag += f"_{aug_tag}"
         ## apply crop augmentation
-        case 3: # apply crop augmentation to (sample, label) simultaneously # if np.random.rand() < 0.5:
-            size, start = _crop_get_params()
+        case 3: # apply crop augmentation to (sample, mask) simultaneously # if np.random.rand() < 0.5:
+            size, start = _crop_get_params(sample)
             sample, aug_tag = aug_crop_resize(sample, size, start)
-            label, _ = aug_crop_resize(label, size, start)
+            mask, _ = aug_crop_resize(mask, size, start)
             tag += f"_{aug_tag}"
         # ## apply brightness/contrast augmentation
         # if np.random.rand() < 0.4: # apply brightness/contrast augmentation to sample
@@ -142,7 +149,7 @@ def apply_augmentation(sample, label, tag, augidx): # apply a single augmentatio
         case 5: # apply blur augmentation to sample # if np.random.rand() < 0.3:
             sample, aug_tag = aug_gaussian_blur(sample)
             tag += f"_{aug_tag}"
-    return sample, label, tag
+    return sample, mask, tag
         # ## apply elastic augmentation
         # if np.random.rand() < 0.4: # apply elastic augmentation to sample
         #     alpha = np.random.uniform(15, 40)
@@ -152,47 +159,47 @@ def apply_augmentation(sample, label, tag, augidx): # apply a single augmentatio
         #     ])
         #     sample = elastic_transform(sample)
         #     tag += "_elastic"
-        #     return sample, self.transform(label), tag
+        #     return sample, self.transform(mask), tag
 
+## Image Dataset
+def image_generator(img_dir):
+    for f in os.listdir(img_dir):
+        img_file = os.path.join(img_dir, f)
+        if os.path.isfile(img_file):
+            yield cv2.imread(img_file)
 
-class ImageDataset(Dataset):
-    def __init__(self, image_shape, img_dir, label_dir, out_channel=1, data_list=None, mode="train", aug=None): # file_format: 'xxx.png'
+class ForestImageDataset(Dataset):
+    def __init__(self, data: DataFrame, img_dir, mask_dir, img_shape=None, out_channel=1, mode="train", aug=True): # file_format: 'xxx.png'
         super().__init__()
+        self.data = data
         self.img_dir = img_dir
-        self.label_dir = label_dir
+        self.mask_dir = mask_dir
         self.mode = mode # train, val, test
-        self.aug = aug
-        self.blank = np.zeros((*image_shape, out_channel), dtype=np.uint8)
-        ## organize files into X, Y, tag
-        img_files = [f for f in os.listdir(img_dir) if os.path.isfile(os.path.join(img_dir, f))]
-        label_files = [f for f in os.listdir(label_dir) if os.path.isfile(os.path.join(label_dir, f))]
-
-        if not data_list: # if data_list is not provided
-            data_list = list(set(img_files) - set(label_files)) if self.mode == "test" else list(set(img_files) & set(label_files))
-        
-        self.tag = [f.replace('.png', '') for f in data_list]
-        self.X = np.array([cv2.imread(os.path.join(img_dir, f)) for f in data_list])
-        self.Y = np.array([rgb2bin(cv2.imread(os.path.join(label_dir, f))) for f in data_list]) if self.mode != "test" else self.blank
-
+        self.aug = aug if self.mode == "train" else False
+        ## if img_shape is not provided, use the shape of the first image
+        if not img_shape:
+            img_shape = cv2.imread(os.path.join(img_dir, data.iloc[0]["image"])).shape[:2]
+        self.blank = np.zeros((*img_shape, out_channel), dtype=np.uint8)
         self.transform = T.Compose([T.ToTensor()]) # convert to tensor and normalize to [0, 1]
 
     def __len__(self):
-        return len(self.X)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        sample = self.X[idx]
-        tag = self.tag[idx]
+        img_file = self.data.iloc[idx]["image"]
+        mask_file = self.data.iloc[idx]["mask"]
+        tag = mask_file.replace(".jpg", "").replace("_mask", "")
+        sample = cv2.imread(os.path.join(self.img_dir, img_file))
+        mask = cv2.imread(os.path.join(self.mask_dir, mask_file))
+        mask = rgb2bin(mask)
         ### image preprocessing
         ## enhance contrast for low-contrast images
         sample = enhance_contrast_rgb(sample)
-        ## no labels for test data
-        if self.mode == "test":
-            return self.transform(sample), self.transform(self.blank), tag
-        label = self.Y[idx]
-        if self.mode == "val":
-            return self.transform(sample), self.transform(label), self.tag[idx]
+        ## validation mode
+        if self.mode != "train":
+            return self.transform(sample), self.transform(mask), tag
         ### apply augmentation with probability 0.5 (for traning)
-        # torch has built-in augmentation, but when applying the same rotation/flip/crop to both sample and label, it might be better to do it manually
+        # torch has built-in augmentation, but when applying the same rotation/flip/crop to both sample and mask, it might be better to do it manually
         if self.aug and np.random.rand() < 0.5: # apply augmentation with probability 0.5
             ## first decide how many augmentaitons to apply (1-3)
             n_aug = np.random.randint(1, 4)
@@ -201,8 +208,8 @@ class ImageDataset(Dataset):
             augidxs = np.random.choice(range(1, 6), n_aug, replace=False, p=[0.3, 0.15, 0.25, 0.15, 0.15])
             augidxs.sort()
             for augidx in augidxs:
-                sample, label, tag = apply_augmentation(sample, label, tag, augidx)
+                sample, mask, tag = apply_augmentation(sample, mask, tag, augidx)
             # ================================================================================================== #
 
-        return self.transform(sample), self.transform(label), tag
+        return self.transform(sample), self.transform(mask), tag
 

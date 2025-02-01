@@ -6,11 +6,6 @@ from matplotlib import pyplot as plt
 
 import torch
 from torch import nn
-from torch.nn import functional as F
-import torchvision.transforms as T
-from torch.utils.data import Dataset, DataLoader, random_split
-
-from sklearn.model_selection import train_test_split, KFold
 
 
 def pixel_accuracy(predictions, ground_truth, tol=1e-5):
@@ -28,11 +23,11 @@ def iou_accuracy(predictions, ground_truth, tol=1e-5):
     correct_pixels = (diff < tol).sum().item() # count the same pixels (within a tolerance) (intersection of the two sets)
     return correct_pixels / tot_pixels
 
-def train(model, train_loader, loss_func, optimizer):
+def train(model, device, train_loader, loss_func, optimizer):
     model.train()
     tot_loss = 0
     for _, (X, Y, tag) in enumerate(train_loader):
-        X, Y = X.to(DEVICE), Y.to(DEVICE)
+        X, Y = X.to(device), Y.to(device)
         optimizer.zero_grad()
         Y_pred = model(X)
         loss = loss_func(Y_pred, Y)
@@ -42,11 +37,12 @@ def train(model, train_loader, loss_func, optimizer):
     return tot_loss / len(train_loader)
     # print(f'Epoch {epoch}, loss: {loss.item()}')
 
-def evaluate(model, val_loader, loss_func, thresh=0.5, verbose=0, plot=False, mode='avg'):
+def evaluate(model, device, val_loader, loss_func, thresh=0.5, verbose=0, plot=False, mode='avg'):
     if mode == 'list':
         val_losses = []
         val_accuracies = []
         val_pix_accs = []
+    plot = plot and verbose
 
     model.eval()
     with torch.no_grad():
@@ -54,9 +50,10 @@ def evaluate(model, val_loader, loss_func, thresh=0.5, verbose=0, plot=False, mo
         tot_accuracy = 0
         tot_pix_acc = 0
         num_images = len(val_loader)
-        fig, axes = plt.subplots(nrows=num_images, ncols=2, figsize=(10, 2 * num_images)) if (verbose and plot) else (None, None)
+        if plot:
+            fig, axes = plt.subplots(nrows=num_images, ncols=3, figsize=(6, 2 * num_images)) # figsize=(10, 2 * num_images)
         for i, (X, Y, tag) in enumerate(val_loader):
-            X, Y = X.to(DEVICE), Y.to(DEVICE)
+            X, Y = X.to(device), Y.to(device)
             Y_pred = model(X)
             val_loss = loss_func(Y_pred, Y).item()
             tot_val_loss += val_loss
@@ -75,7 +72,7 @@ def evaluate(model, val_loader, loss_func, thresh=0.5, verbose=0, plot=False, mo
                 val_accuracies.append(accuracy)
                 val_pix_accs.append(pix_acc)
             ## plot
-            if verbose and plot:
+            if plot:
                 # Predicted image
                 axes[i, 0].imshow(Y_pred[0].cpu().numpy().transpose(1, 2, 0), cmap='gray')
                 axes[i, 0].set_title("Prediction")
@@ -84,7 +81,11 @@ def evaluate(model, val_loader, loss_func, thresh=0.5, verbose=0, plot=False, mo
                 axes[i, 1].imshow(Y[0].cpu().numpy().transpose(1, 2, 0), cmap='gray')
                 axes[i, 1].set_title("Ground Truth")
                 axes[i, 1].axis("off")
-        if verbose and plot:
+                # Original image
+                axes[i, 2].imshow(X[0].cpu().numpy().transpose(1, 2, 0))
+                axes[i, 2].set_title("Original")
+                axes[i, 2].axis("off")
+        if plot:
             plt.tight_layout()
             plt.show()
         
