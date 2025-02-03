@@ -37,7 +37,7 @@ def train(model, device, train_loader, loss_func, optimizer):
     return tot_loss / len(train_loader)
     # print(f'Epoch {epoch}, loss: {loss.item()}')
 
-def evaluate(model, device, val_loader, loss_func, thresh=0.5, verbose=0, plot=False, mode='avg'):
+def evaluate(model, device, val_loader, loss_func, thresh=0.5, verbose=0, check=0, plot=False, mode='avg'):
     if mode == 'list':
         val_losses = []
         val_accuracies = []
@@ -62,6 +62,8 @@ def evaluate(model, device, val_loader, loss_func, thresh=0.5, verbose=0, plot=F
             Y_pred = (Y_pred > thresh).float()
             # print("min/max of Y_pred", Y_pred.min(), Y_pred.max())
             # accuracy = (Y_pred == Y).float().mean().item()
+            if check:
+                print(f"prediction of {tag}:\n{Y_pred[0]}\n")
             accuracy = iou_accuracy(Y_pred, Y)
             tot_accuracy += accuracy
             pix_acc = pixel_accuracy(Y_pred, Y)
@@ -74,11 +76,11 @@ def evaluate(model, device, val_loader, loss_func, thresh=0.5, verbose=0, plot=F
             ## plot
             if plot:
                 # Predicted image
-                axes[i, 0].imshow(Y_pred[0].cpu().numpy().transpose(1, 2, 0), cmap='gray')
+                axes[i, 0].imshow(Y_pred[0].cpu().numpy().transpose(1, 2, 0), cmap='gray', vmin=0, vmax=1)
                 axes[i, 0].set_title("Prediction")
                 axes[i, 0].axis("off")
                 # Ground truth image
-                axes[i, 1].imshow(Y[0].cpu().numpy().transpose(1, 2, 0), cmap='gray')
+                axes[i, 1].imshow(Y[0].cpu().numpy().transpose(1, 2, 0), cmap='gray', vmin=0, vmax=1)
                 axes[i, 1].set_title("Ground Truth")
                 axes[i, 1].axis("off")
                 # Original image
