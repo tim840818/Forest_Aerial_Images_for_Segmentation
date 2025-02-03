@@ -7,11 +7,11 @@ The dataset comes from Quadeer's [Forest Aerial Images for Segmentation](https:/
 
 
 ## Methodology
-Masks are transformed to be binary single-channel. Low contrast images are enhanced using CLAHE technique. Augmentations such as rotation, cropping, erasing, gaussian noise and gaussian blur are implemented in training process.
+Masks are converted into binary single-channel representations. Low-contrast images are enhanced using the CLAHE (Contrast Limited Adaptive Histogram Equalization) technique. Data augmentations, including rotation, cropping, erasing, Gaussian noise, and Gaussian blur, are applied during training.
 
-The U-Net model consists of encoding and decoding layers. Encoding layers encode images into useful informations using convolutional filters. Decoding layers then construct masks that will be trained to identify forest areas. The technique "skip-connection" is also used to preserve smaller features.
+The U-Net model consists of an encoder and a decoder. The encoder extracts hierarchical features using convolutional layers, progressively reducing spatial dimensions while increasing feature abstraction. The decoder then reconstructs segmentation masks to identify forest areas. Skip connections are incorporated to transfer high-resolution spatial features from the encoder to the decoder, helping to preserve fine details and improve segmentation accuracy.
 
-Tversky loss is chosen to be the loss function instead of BCE due to a significant imbalance between forest and non-forest areas.
+Tversky loss is chosen as the loss function instead of binary cross-entropy (BCE) due to a significant class imbalance between forest and non-forest areas.
 
 
 ## Results
